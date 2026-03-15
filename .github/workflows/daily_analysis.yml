@@ -9,7 +9,7 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -24,15 +24,85 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run stock analysis
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python analyzer.py
-
-      - name: Commit and push results
+      - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Run stock analysis with periodic commits
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          python -c "
+          import analyzer
+          import os, time, subprocess, pandas as pd
+          from datetime import datetime, timedelta
+
+          sp500 = analyzer.get_sp500_tickers()
+          if not sp500:
+              exit(1)
+
+          data_dir = 'data'
+          os.makedirs(data_dir, exist_ok=True)
+          output_file = os.path.join(data_dir, 'sp500_analysis.csv')
+
+          # Load existing
+          results = []
+          already_done = set()
+          now = datetime.today()
+          cutoff = (now - timedelta(hours=24)).strftime('%Y-%m-%d')
+          if os.path.exists(output_file):
+              try:
+                  existing = pd.read_csv(output_file)
+                  recent = existing[existing['date'] >= cutoff]
+                  already_done = set(recent['ticker'].tolist())
+                  results = recent.to_dict('records')
+                  print(f'Skipping {len(already_done)} stocks (updated within 24h)')
+              except Exception:
+                  pass
+
+          total = len(sp500)
+          batch_count = 0
+          start_time = time.time()
+
+          for i, stock in enumerate(sp500):
+              ticker = stock['ticker']
+              if ticker in already_done:
+                  continue
+
+              try:
+                  result = analyzer.analyze_single_stock(
+                      ticker, stock['company'], stock['sector'], stock['sub_industry']
+                  )
+                  if result:
+                      results.append(result)
+                      pd.DataFrame(results).to_csv(output_file, index=False)
+                      batch_count += 1
+              except Exception as e:
+                  print(f'Error: {ticker}: {e}')
+
+              done = i + 1
+              elapsed = time.time() - start_time
+              print(f'[{done}/{total}] {ticker} | {elapsed/60:.1f}m')
+
+              # Commit & push every 50 stocks
+              if batch_count > 0 and batch_count % 50 == 0:
+                  subprocess.run(['git', 'add', 'data/'], check=True)
+                  subprocess.run(['git', 'commit', '-m', f'Update analysis: {len(results)}/{total} stocks'], check=False)
+                  subprocess.run(['git', 'pull', '--rebase'], check=False)
+                  subprocess.run(['git', 'push'], check=False)
+                  print(f'Pushed progress: {len(results)}/{total}')
+
+          # Final save & push
+          if results:
+              pd.DataFrame(results).to_csv(output_file, index=False)
+
+          print(f'Done! {len(results)} stocks in {(time.time()-start_time)/60:.1f}m')
+          "
+
+      - name: Final commit and push
+        run: |
           git add data/
           git diff --staged --quiet || git commit -m "Update S&P 500 analysis $(date +%Y-%m-%d)"
+          git pull --rebase || true
           git push
