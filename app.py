@@ -329,8 +329,37 @@ def render_scatter(df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def get_workflow_status() -> dict:
+    """Check latest GitHub Actions workflow run status."""
+    if not GITHUB_TOKEN:
+        return None
+    try:
+        resp = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/daily_analysis.yml/runs",
+            headers={
+                "Authorization": f"Bearer {GITHUB_TOKEN}",
+                "Accept": "application/vnd.github+json",
+            },
+            params={"per_page": 1},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            runs = resp.json().get("workflow_runs", [])
+            if runs:
+                run = runs[0]
+                return {
+                    "status": run["status"],           # queued, in_progress, completed
+                    "conclusion": run.get("conclusion"),  # success, failure, cancelled
+                    "started": run["created_at"][:16].replace("T", " "),
+                    "url": run["html_url"],
+                }
+    except Exception:
+        pass
+    return None
+
+
 def render_run_button():
-    """Render button to trigger GitHub Actions analysis."""
+    """Render button to trigger GitHub Actions + show status."""
     st.sidebar.markdown("---")
     st.sidebar.subheader("Run Analysis")
 
@@ -338,7 +367,33 @@ def render_run_button():
         st.sidebar.caption("Add `GITHUB_TOKEN` to secrets to enable.")
         return
 
-    if st.sidebar.button("🚀 Run S&P 500 Analysis", use_container_width=True):
+    # Show current workflow status
+    status = get_workflow_status()
+    if status:
+        s = status["status"]
+        conclusion = status["conclusion"]
+
+        if s in ("queued", "in_progress"):
+            label = "⏳ Queued..." if s == "queued" else "🔄 Running..."
+            st.sidebar.warning(f"{label}\nStarted: {status['started']}")
+            st.sidebar.link_button("View on GitHub", status["url"], use_container_width=True)
+        elif s == "completed":
+            if conclusion == "success":
+                st.sidebar.success(f"✅ Last run: Success\n{status['started']}")
+            elif conclusion == "failure":
+                st.sidebar.error(f"❌ Last run: Failed\n{status['started']}")
+                st.sidebar.link_button("View logs", status["url"], use_container_width=True)
+            else:
+                st.sidebar.info(f"Last run: {conclusion}\n{status['started']}")
+
+    # Run button (disable if already running)
+    is_running = status and status["status"] in ("queued", "in_progress") if status else False
+
+    if st.sidebar.button(
+        "🚀 Run S&P 500 Analysis",
+        use_container_width=True,
+        disabled=is_running,
+    ):
         try:
             resp = requests.post(
                 f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/daily_analysis.yml/dispatches",
@@ -350,13 +405,14 @@ def render_run_button():
                 timeout=15,
             )
             if resp.status_code == 204:
-                st.sidebar.success("Analysis started! Data will update in ~30-60 min.")
+                st.sidebar.success("Analysis started! Refresh page to see status.")
+                st.rerun()
             else:
                 st.sidebar.error(f"Failed: {resp.status_code} - {resp.text[:100]}")
         except Exception as e:
             st.sidebar.error(f"Error: {e}")
 
-    st.sidebar.caption("Triggers GitHub Actions to re-analyze all 503 stocks.")
+    st.sidebar.caption("Analyzes all 503 S&P 500 stocks (~30-60 min)")
 
 
 # --- Main App ---
