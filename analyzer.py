@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # --- Gemini API ---
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 
 def gemini_generate(prompt: str) -> Optional[str]:
