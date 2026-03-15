@@ -85,8 +85,8 @@ jobs:
               elapsed = time.time() - start_time
               print(f'[{done}/{total}] {ticker} | {elapsed/60:.1f}m')
 
-              # Commit & push every 50 stocks
-              if batch_count > 0 and batch_count % 50 == 0:
+              # Commit & push every 10 stocks
+              if batch_count > 0 and batch_count % 10 == 0:
                   subprocess.run(['git', 'add', 'data/'], check=True)
                   subprocess.run(['git', 'commit', '-m', f'Update analysis: {len(results)}/{total} stocks'], check=False)
                   subprocess.run(['git', 'pull', '--rebase'], check=False)
