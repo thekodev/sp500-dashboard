@@ -362,10 +362,8 @@ def run_full_analysis():
             if result:
                 results.append(result)
 
-                # Save progress every 10 stocks
-                if len(results) % 10 == 0:
-                    pd.DataFrame(results).to_csv(output_file, index=False)
-                    logger.info(f"Progress saved: {len(results)}/{total}")
+                # Save after every stock
+                pd.DataFrame(results).to_csv(output_file, index=False)
 
         except Exception as e:
             logger.error(f"Error analyzing {ticker}: {e}")
