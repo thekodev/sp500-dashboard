@@ -128,7 +128,7 @@ def render_overview_table(df: pd.DataFrame):
     display_cols = [
         "ticker", "company", "sector", "price", "change_1m_pct", "change_1y_pct",
         "trend", "rsi", "rsi_status", "volatility_pct",
-        "pe_trailing", "roe_pct", "market_cap_b", "sentiment_score",
+        "pe_trailing", "roe_pct", "market_cap_b", "sentiment_score", "date",
     ]
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
@@ -141,6 +141,7 @@ def render_overview_table(df: pd.DataFrame):
         "volatility_pct": "Volatility %", "pe_trailing": "P/E",
         "roe_pct": "ROE %", "market_cap_b": "MCap ($B)",
         "sentiment_score": "Sentiment",
+        "date": "Last Update",
     }
     display_df = display_df.rename(columns={k: v for k, v in rename.items() if k in display_df.columns})
 
