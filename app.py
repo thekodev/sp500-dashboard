@@ -25,7 +25,7 @@ st.set_page_config(
 DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "sp500_analysis.csv")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
 
 
 def gemini_chat(prompt: str) -> str:

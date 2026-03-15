@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # --- Gemini API ---
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
 
 
 def gemini_generate(prompt: str) -> Optional[str]:
@@ -66,7 +66,10 @@ def get_sp500_tickers() -> List[Dict]:
     """Fetch S&P 500 tickers from Wikipedia."""
     url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
     try:
-        df = pd.read_html(url)[0]
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=15)
+        from io import StringIO
+        df = pd.read_html(StringIO(resp.text))[0]
         tickers = []
         for _, row in df.iterrows():
             tickers.append({
