@@ -338,14 +338,17 @@ def run_full_analysis():
     output_file = os.path.join(data_dir, "sp500_analysis.csv")
 
     already_done = set()
-    today = datetime.today().strftime('%Y-%m-%d')
+    now = datetime.today()
+    cutoff = (now - timedelta(hours=24)).strftime('%Y-%m-%d')
     if os.path.exists(output_file):
         try:
             existing = pd.read_csv(output_file)
-            already_done = set(existing[existing["date"] == today]["ticker"].tolist())
+            # Keep stocks analyzed within last 24 hours
+            recent = existing[existing["date"] >= cutoff]
+            already_done = set(recent["ticker"].tolist())
             if already_done:
-                results = existing[existing["date"] == today].to_dict("records")
-                logger.info(f"Resuming: {len(already_done)} stocks already analyzed today")
+                results = recent.to_dict("records")
+                logger.info(f"Skipping {len(already_done)} stocks (updated within 24h)")
         except Exception:
             pass
 
