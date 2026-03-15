@@ -26,6 +26,8 @@ DATA_FILE = os.path.join(os.path.dirname(__file__), "data", "sp500_analysis.csv"
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent"
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = "thekodev/sp500-dashboard"
 
 
 def gemini_chat(prompt: str) -> str:
@@ -327,6 +329,36 @@ def render_scatter(df: pd.DataFrame):
     st.plotly_chart(fig, use_container_width=True)
 
 
+def render_run_button():
+    """Render button to trigger GitHub Actions analysis."""
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("Run Analysis")
+
+    if not GITHUB_TOKEN:
+        st.sidebar.caption("Add `GITHUB_TOKEN` to secrets to enable.")
+        return
+
+    if st.sidebar.button("🚀 Run S&P 500 Analysis", use_container_width=True):
+        try:
+            resp = requests.post(
+                f"https://api.github.com/repos/{GITHUB_REPO}/actions/workflows/daily_analysis.yml/dispatches",
+                headers={
+                    "Authorization": f"Bearer {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github+json",
+                },
+                json={"ref": "master"},
+                timeout=15,
+            )
+            if resp.status_code == 204:
+                st.sidebar.success("Analysis started! Data will update in ~30-60 min.")
+            else:
+                st.sidebar.error(f"Failed: {resp.status_code} - {resp.text[:100]}")
+        except Exception as e:
+            st.sidebar.error(f"Error: {e}")
+
+    st.sidebar.caption("Triggers GitHub Actions to re-analyze all 503 stocks.")
+
+
 # --- Main App ---
 
 def main():
@@ -340,6 +372,9 @@ def main():
 
     filtered_df = render_sidebar(df)
     render_header(filtered_df)
+
+    # Run Analysis button in sidebar
+    render_run_button()
 
     # Tabs
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
