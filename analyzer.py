@@ -20,6 +20,7 @@ import sys
 from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 from typing import Optional, Dict, List, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Setup logging
 logging.basicConfig(
@@ -202,38 +203,55 @@ def fetch_news_headlines(company: str, max_headlines: int = 5) -> List[str]:
         return []
 
 
-def analyze_sentiment_batch(headlines: List[str]) -> Tuple[float, str]:
-    """Use Gemini to analyze sentiment of multiple headlines at once."""
+def analyze_sentiment_and_governance(headlines: List[str], ticker: str, company: str) -> Dict:
+    """Use Gemini to analyze sentiment + governance risk in a single call."""
     if not headlines:
-        return 0.0, ""
+        return {"sentiment_score": 0.0, "news_summary": "", "governance_score": 0, "governance_level": "Low", "governance_reason": ""}
 
     headlines_text = "\n".join(f"{i+1}. {h}" for i, h in enumerate(headlines))
-    prompt = f"""Analyze the sentiment of these stock news headlines.
-For each headline, rate from -1 (very negative) to 1 (very positive).
-Then provide an overall score and a brief 1-sentence summary in Thai.
+    prompt = f"""Analyze these stock news headlines for {ticker} ({company}).
+
+Do TWO things:
+
+1. SENTIMENT: Rate overall sentiment from -1 (very negative) to 1 (very positive). Provide a 1-sentence summary in Thai.
+
+2. GOVERNANCE RISK: Rate governance risk from 0 (no risk) to 10 (critical risk).
+Consider these factors:
+- Criminal cases, DOJ/SEC investigations, fraud
+- Fines, lawsuits, settlements (relative to company size)
+- Accounting irregularities, auditor resignation
+- Executive conflicts of interest, insider trading
+- Antitrust, monopoly, consumer exploitation
+- Environmental violations
+Also use your own knowledge about {ticker} ({company}) for any known governance issues not mentioned in the headlines.
 
 Headlines:
 {headlines_text}
 
 Reply in this exact JSON format:
-{{"scores": [0.5, -0.3, ...], "overall": 0.2, "summary_th": "ข่าวส่วนใหญ่เป็นบวก..."}}"""
+{{"sentiment_overall": 0.2, "sentiment_summary_th": "...", "governance_score": 3, "governance_level": "Low|Medium|High|Critical", "governance_reason": "brief reason in Thai"}}
+
+governance_level mapping: 0-2=Low, 3-5=Medium, 6-8=High, 9-10=Critical"""
 
     reply = gemini_generate(prompt)
+    result = {"sentiment_score": 0.0, "news_summary": "", "governance_score": 0, "governance_level": "Low", "governance_reason": ""}
+
     if not reply:
-        return 0.0, ""
+        return result
 
     try:
-        # Extract JSON from reply
         json_match = re.search(r'\{.*\}', reply, re.DOTALL)
         if json_match:
             data = json.loads(json_match.group())
-            score = max(-1, min(1, float(data.get("overall", 0))))
-            summary = data.get("summary_th", "")
-            return round(score, 3), summary
+            result["sentiment_score"] = round(max(-1, min(1, float(data.get("sentiment_overall", 0)))), 3)
+            result["news_summary"] = data.get("sentiment_summary_th", "")
+            result["governance_score"] = max(0, min(10, int(data.get("governance_score", 0))))
+            result["governance_level"] = data.get("governance_level", "Low")
+            result["governance_reason"] = data.get("governance_reason", "")
     except (json.JSONDecodeError, ValueError, KeyError) as e:
-        logger.error(f"Failed to parse sentiment response: {e}")
+        logger.error(f"Failed to parse sentiment/governance response: {e}")
 
-    return 0.0, ""
+    return result
 
 
 # --- AI Summary ---
@@ -272,13 +290,13 @@ def analyze_single_stock(ticker: str, company: str, sector: str, sub_industry: s
     # Fundamental
     fund = fundamental_analysis(ticker)
 
-    # Sentiment
+    # Sentiment + Governance (combined in 1 Gemini call)
     headlines = fetch_news_headlines(company)
-    sentiment_score, news_summary = analyze_sentiment_batch(headlines)
+    sg = analyze_sentiment_and_governance(headlines, ticker, company)
 
-    # AI Summary (rate limit: wait between Gemini calls)
+    # AI Summary
     time.sleep(1)
-    ai_summary = generate_stock_summary(ticker, tech, fund, sentiment_score)
+    ai_summary = generate_stock_summary(ticker, tech, fund, sg["sentiment_score"])
     time.sleep(1)
 
     return {
@@ -287,6 +305,7 @@ def analyze_single_stock(ticker: str, company: str, sector: str, sub_industry: s
         "sector": sector,
         "sub_industry": sub_industry,
         "date": datetime.today().strftime('%Y-%m-%d'),
+        "last_update": datetime.now().strftime('%Y-%m-%d %H:%M'),
         # Price
         "price": tech["current_price"],
         "change_1m_pct": tech["price_change_1m"],
@@ -312,14 +331,18 @@ def analyze_single_stock(ticker: str, company: str, sector: str, sub_industry: s
         "net_income_b": fund["net_income"],
         "beta": fund["beta"],
         # Sentiment & AI
-        "sentiment_score": sentiment_score,
-        "news_summary": news_summary,
+        "sentiment_score": sg["sentiment_score"],
+        "news_summary": sg["news_summary"],
         "ai_summary": ai_summary,
+        # Governance Risk
+        "governance_score": sg["governance_score"],
+        "governance_level": sg["governance_level"],
+        "governance_reason": sg["governance_reason"],
     }
 
 
-def run_full_analysis():
-    """Run analysis for all S&P 500 stocks."""
+def run_full_analysis(max_workers: int = 5):
+    """Run analysis for all S&P 500 stocks with parallel processing."""
     start_time = time.time()
 
     # Get S&P 500 list
@@ -329,21 +352,19 @@ def run_full_analysis():
         return
 
     total = len(sp500)
-    results = []
-    errors = []
 
     # Load existing data to resume if interrupted
     data_dir = os.path.join(os.path.dirname(__file__), "data")
     os.makedirs(data_dir, exist_ok=True)
     output_file = os.path.join(data_dir, "sp500_analysis.csv")
 
+    results = []
     already_done = set()
     now = datetime.today()
     cutoff = (now - timedelta(hours=24)).strftime('%Y-%m-%d')
     if os.path.exists(output_file):
         try:
             existing = pd.read_csv(output_file)
-            # Keep stocks analyzed within last 24 hours
             recent = existing[existing["date"] >= cutoff]
             already_done = set(recent["ticker"].tolist())
             if already_done:
@@ -352,32 +373,53 @@ def run_full_analysis():
         except Exception:
             pass
 
-    for i, stock in enumerate(sp500):
-        ticker = stock["ticker"]
+    # Filter stocks that need analysis
+    to_analyze = [s for s in sp500 if s["ticker"] not in already_done]
+    logger.info(f"Analyzing {len(to_analyze)} stocks with {max_workers} workers...")
 
-        if ticker in already_done:
-            continue
+    errors = []
+    completed = 0
+    lock = __import__('threading').Lock()
 
-        try:
-            result = analyze_single_stock(
-                ticker, stock["company"], stock["sector"], stock["sub_industry"]
-            )
-            if result:
-                results.append(result)
+    def _analyze_stock(stock):
+        """Worker function for parallel analysis."""
+        return analyze_single_stock(
+            stock["ticker"], stock["company"], stock["sector"], stock["sub_industry"]
+        )
 
-                # Save after every stock
-                pd.DataFrame(results).to_csv(output_file, index=False)
+    # Process in batches for periodic saves
+    batch_size = max_workers * 2
+    for batch_start in range(0, len(to_analyze), batch_size):
+        batch = to_analyze[batch_start:batch_start + batch_size]
 
-        except Exception as e:
-            logger.error(f"Error analyzing {ticker}: {e}")
-            errors.append(ticker)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_analyze_stock, s): s for s in batch}
 
-        # Progress
-        done = len(already_done) + (i + 1 - len(already_done))
-        elapsed = time.time() - start_time
-        avg = elapsed / max(done - len(already_done), 1)
-        remaining = (total - done) * avg
-        logger.info(f"[{done}/{total}] {ticker} | Elapsed: {elapsed/60:.1f}m | ETA: {remaining/60:.1f}m")
+            for future in as_completed(futures):
+                stock = futures[future]
+                ticker = stock["ticker"]
+                try:
+                    result = future.result()
+                    if result:
+                        with lock:
+                            results.append(result)
+                            completed += 1
+                except Exception as e:
+                    logger.error(f"Error analyzing {ticker}: {e}")
+                    errors.append(ticker)
+                    with lock:
+                        completed += 1
+
+                elapsed = time.time() - start_time
+                done_total = len(already_done) + completed
+                avg = elapsed / max(completed, 1)
+                remaining = (len(to_analyze) - completed) * avg
+                logger.info(f"[{done_total}/{total}] {ticker} | Elapsed: {elapsed/60:.1f}m | ETA: {remaining/60:.1f}m")
+
+        # Save after each batch
+        if results:
+            pd.DataFrame(results).to_csv(output_file, index=False)
+            logger.info(f"Saved progress: {len(results)}/{total} stocks")
 
     # Final save
     if results:

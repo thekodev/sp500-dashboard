@@ -64,19 +64,21 @@ def render_header(df: pd.DataFrame):
     date = df["date"].iloc[0] if "date" in df.columns else "N/A"
     st.caption(f"Last updated: {date} | Total stocks: {len(df)}")
 
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
 
     uptrend = len(df[df["trend"] == "Uptrend"])
     downtrend = len(df[df["trend"] == "Downtrend"])
     avg_sentiment = df["sentiment_score"].mean() if "sentiment_score" in df.columns else 0
     overbought = len(df[df["rsi_status"] == "Overbought"])
     oversold = len(df[df["rsi_status"] == "Oversold"])
+    high_gov_risk = len(df[df["governance_level"].isin(["High", "Critical"])]) if "governance_level" in df.columns else 0
 
     col1.metric("Uptrend", f"{uptrend}", f"{uptrend/len(df)*100:.0f}%")
     col2.metric("Downtrend", f"{downtrend}", f"{downtrend/len(df)*100:.0f}%")
     col3.metric("Avg Sentiment", f"{avg_sentiment:.3f}")
     col4.metric("Overbought", f"{overbought}")
     col5.metric("Oversold", f"{oversold}")
+    col6.metric("⚠️ High Gov Risk", f"{high_gov_risk}")
 
 
 def render_sidebar(df: pd.DataFrame):
@@ -92,6 +94,13 @@ def render_sidebar(df: pd.DataFrame):
 
     # RSI filter
     selected_rsi = st.sidebar.selectbox("RSI Status", ["All", "Overbought", "Oversold", "Neutral"])
+
+    # Governance Risk filter
+    governance_options = ["All", "Low", "Medium", "High", "Critical"]
+    if "governance_level" in df.columns:
+        selected_governance = st.sidebar.selectbox("Governance Risk", governance_options)
+    else:
+        selected_governance = "All"
 
     # Sentiment filter
     sentiment_range = st.sidebar.slider("Sentiment Score", -1.0, 1.0, (-1.0, 1.0), 0.1)
@@ -111,6 +120,8 @@ def render_sidebar(df: pd.DataFrame):
         (filtered["sentiment_score"] >= sentiment_range[0])
         & (filtered["sentiment_score"] <= sentiment_range[1])
     ]
+    if selected_governance != "All" and "governance_level" in filtered.columns:
+        filtered = filtered[filtered["governance_level"] == selected_governance]
     if search:
         search_lower = search.lower()
         filtered = filtered[
@@ -128,7 +139,8 @@ def render_overview_table(df: pd.DataFrame):
     display_cols = [
         "ticker", "company", "sector", "price", "change_1m_pct", "change_1y_pct",
         "trend", "rsi", "rsi_status", "volatility_pct",
-        "pe_trailing", "roe_pct", "market_cap_b", "sentiment_score", "date",
+        "pe_trailing", "roe_pct", "market_cap_b", "sentiment_score",
+        "governance_score", "governance_level", "last_update",
     ]
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
@@ -141,7 +153,9 @@ def render_overview_table(df: pd.DataFrame):
         "volatility_pct": "Volatility %", "pe_trailing": "P/E",
         "roe_pct": "ROE %", "market_cap_b": "MCap ($B)",
         "sentiment_score": "Sentiment",
-        "date": "Last Update",
+        "governance_score": "Gov Risk",
+        "governance_level": "Gov Level",
+        "last_update": "Last Update",
     }
     display_df = display_df.rename(columns={k: v for k, v in rename.items() if k in display_df.columns})
 
@@ -156,6 +170,7 @@ def render_overview_table(df: pd.DataFrame):
             "ROE %": st.column_config.NumberColumn(format="%.2f%%"),
             "MCap ($B)": st.column_config.NumberColumn(format="$%.1fB"),
             "Sentiment": st.column_config.ProgressColumn(min_value=-1, max_value=1, format="%.3f"),
+            "Gov Risk": st.column_config.ProgressColumn(min_value=0, max_value=10, format="%d/10"),
         },
     )
 
@@ -230,6 +245,24 @@ def render_stock_detail(df: pd.DataFrame):
     col2.metric("ROE", f"{stock['roe_pct'] or 'N/A'}%")
     col3.metric("Volatility", f"{stock['volatility_pct']:.2f}%")
     col4.metric("Trend", stock['trend'])
+
+    # Governance Risk
+    gov_score = stock.get("governance_score", 0)
+    gov_level = stock.get("governance_level", "Low")
+    gov_reason = stock.get("governance_reason", "")
+    if gov_score is not None and pd.notna(gov_score):
+        gov_colors = {"Low": "success", "Medium": "warning", "High": "error", "Critical": "error"}
+        gov_icons = {"Low": "✅", "Medium": "⚠️", "High": "🔶", "Critical": "🔴"}
+        icon = gov_icons.get(gov_level, "❓")
+        msg = f"{icon} **Governance Risk: {gov_level} ({int(gov_score)}/10)**"
+        if gov_reason:
+            msg += f"\n\n{gov_reason}"
+        if gov_level in ("High", "Critical"):
+            st.error(msg)
+        elif gov_level == "Medium":
+            st.warning(msg)
+        else:
+            st.success(msg)
 
     # AI Summary
     if stock.get("ai_summary") and pd.notna(stock["ai_summary"]):
