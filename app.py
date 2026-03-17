@@ -48,13 +48,33 @@ def gemini_chat(prompt: str) -> str:
         return f"Error: {e}"
 
 
+BLACKLIST_FILE = os.path.join(os.path.dirname(__file__), "data", "blacklist.json")
+
+
 @st.cache_data(ttl=300)
 def load_data():
-    """Load analysis data from CSV."""
+    """Load analysis data from CSV, auto-filter High/Critical governance."""
     if not os.path.exists(DATA_FILE):
-        return None
+        return None, None
     df = pd.read_csv(DATA_FILE)
-    return df
+    # Separate blacklisted stocks
+    blacklisted = None
+    if "governance_level" in df.columns:
+        blacklisted = df[df["governance_level"].isin(["High", "Critical"])].copy()
+        df = df[~df["governance_level"].isin(["High", "Critical"])].copy()
+    return df, blacklisted
+
+
+@st.cache_data(ttl=3600)
+def load_blacklist():
+    """Load blacklist file."""
+    if os.path.exists(BLACKLIST_FILE):
+        try:
+            with open(BLACKLIST_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 def render_header(df: pd.DataFrame):
@@ -133,7 +153,7 @@ def render_sidebar(df: pd.DataFrame):
 
 
 def render_overview_table(df: pd.DataFrame):
-    """Render sortable overview table."""
+    """Render overview table. Click a row to see stock detail below."""
     st.subheader("Stock Overview")
 
     display_cols = [
@@ -159,10 +179,13 @@ def render_overview_table(df: pd.DataFrame):
     }
     display_df = display_df.rename(columns={k: v for k, v in rename.items() if k in display_df.columns})
 
-    st.dataframe(
+    # Interactive table — clicking a row shows detail below
+    event = st.dataframe(
         display_df,
         use_container_width=True,
         height=500,
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
             "1M %": st.column_config.NumberColumn(format="%.2f%%"),
             "1Y %": st.column_config.NumberColumn(format="%.2f%%"),
@@ -173,6 +196,13 @@ def render_overview_table(df: pd.DataFrame):
             "Gov Risk": st.column_config.ProgressColumn(min_value=0, max_value=10, format="%d/10"),
         },
     )
+
+    # Show detail card when row is selected
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        idx = selected_rows[0]
+        stock = df.iloc[idx]
+        _render_stock_card(stock)
 
 
 def render_sector_chart(df: pd.DataFrame):
@@ -221,17 +251,14 @@ def render_top_movers(df: pd.DataFrame):
         st.dataframe(top_losers, use_container_width=True)
 
 
-def render_stock_detail(df: pd.DataFrame):
-    """Render detailed view for a single stock."""
-    st.subheader("Stock Detail")
+def _render_stock_card(stock):
+    """Render a stock detail card (used by both table click and detail tab)."""
+    st.markdown(f"### {stock['ticker']} — {stock.get('company', 'N/A')}")
 
-    tickers = df["ticker"].tolist()
-    selected = st.selectbox("Select stock", tickers)
-
-    if not selected:
-        return
-
-    stock = df[df["ticker"] == selected].iloc[0]
+    # Business description
+    biz = stock.get("business_summary", "")
+    if biz and pd.notna(biz) and str(biz).strip():
+        st.caption(f"📋 {biz}")
 
     # Info cards
     col1, col2, col3, col4 = st.columns(4)
@@ -251,7 +278,6 @@ def render_stock_detail(df: pd.DataFrame):
     gov_level = stock.get("governance_level", "Low")
     gov_reason = stock.get("governance_reason", "")
     if gov_score is not None and pd.notna(gov_score):
-        gov_colors = {"Low": "success", "Medium": "warning", "High": "error", "Critical": "error"}
         gov_icons = {"Low": "✅", "Medium": "⚠️", "High": "🔶", "Critical": "🔴"}
         icon = gov_icons.get(gov_level, "❓")
         msg = f"{icon} **Governance Risk: {gov_level} ({int(gov_score)}/10)**"
@@ -270,7 +296,21 @@ def render_stock_detail(df: pd.DataFrame):
 
     # News Summary
     if stock.get("news_summary") and pd.notna(stock["news_summary"]):
-        st.warning(f"📰 **News:** {stock['news_summary']}")
+        st.caption(f"📰 **News:** {stock['news_summary']}")
+
+
+def render_stock_detail(df: pd.DataFrame):
+    """Render detailed view for a single stock."""
+    st.subheader("Stock Detail")
+
+    tickers = df["ticker"].tolist()
+    selected = st.selectbox("Select stock", tickers)
+
+    if not selected:
+        return
+
+    stock = df[df["ticker"] == selected].iloc[0]
+    _render_stock_card(stock)
 
 
 def render_ai_chat(df: pd.DataFrame):
@@ -451,8 +491,40 @@ def render_run_button():
 
 # --- Main App ---
 
+def render_blacklist(blacklisted_df, blacklist_data):
+    """Render blacklisted stocks tab."""
+    st.subheader("🚫 Blacklisted Stocks (High/Critical Governance Risk)")
+    st.caption("These stocks are excluded from analysis and will not be considered in the future.")
+
+    if blacklisted_df is not None and not blacklisted_df.empty:
+        display_cols = ["ticker", "company", "sector", "governance_score", "governance_level", "governance_reason", "last_update"]
+        available = [c for c in display_cols if c in blacklisted_df.columns]
+        st.dataframe(
+            blacklisted_df[available].rename(columns={
+                "ticker": "Ticker", "company": "Company", "sector": "Sector",
+                "governance_score": "Gov Score", "governance_level": "Level",
+                "governance_reason": "Reason", "last_update": "Last Update",
+            }),
+            use_container_width=True,
+            height=400,
+        )
+    elif blacklist_data:
+        rows = []
+        for ticker, info in blacklist_data.items():
+            rows.append({
+                "Ticker": ticker,
+                "Company": info.get("company", ""),
+                "Level": info.get("level", ""),
+                "Reason": info.get("reason", ""),
+                "Blacklisted": info.get("blacklisted_date", ""),
+            })
+        st.dataframe(pd.DataFrame(rows), use_container_width=True)
+    else:
+        st.info("No blacklisted stocks yet.")
+
+
 def main():
-    df = load_data()
+    df, blacklisted_df = load_data()
 
     if df is None:
         st.title("📈 S&P 500 Dashboard")
@@ -467,8 +539,8 @@ def main():
     render_run_button()
 
     # Tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 Overview", "🏢 Sectors", "🚀 Top Movers", "🔍 Stock Detail", "🤖 AI Chat"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📊 Overview", "🏢 Sectors", "🚀 Top Movers", "🔍 Stock Detail", "🤖 AI Chat", "🚫 Blacklist"
     ])
 
     with tab1:
@@ -486,6 +558,9 @@ def main():
 
     with tab5:
         render_ai_chat(df)
+
+    with tab6:
+        render_blacklist(blacklisted_df, load_blacklist())
 
 
 if __name__ == "__main__":

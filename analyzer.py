@@ -33,6 +33,43 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# --- Blacklist (High/Critical governance risk) ---
+
+BLACKLIST_FILE = os.path.join(os.path.dirname(__file__), "data", "blacklist.json")
+
+
+def load_blacklist() -> Dict:
+    """Load blacklisted tickers (High/Critical governance risk)."""
+    if os.path.exists(BLACKLIST_FILE):
+        try:
+            with open(BLACKLIST_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def save_blacklist(blacklist: Dict):
+    """Save blacklist to file."""
+    os.makedirs(os.path.dirname(BLACKLIST_FILE), exist_ok=True)
+    with open(BLACKLIST_FILE, "w") as f:
+        json.dump(blacklist, f, indent=2, ensure_ascii=False)
+
+
+def update_blacklist(ticker: str, company: str, governance_level: str, governance_reason: str):
+    """Add ticker to blacklist if governance is High or Critical."""
+    if governance_level in ("High", "Critical"):
+        blacklist = load_blacklist()
+        blacklist[ticker] = {
+            "company": company,
+            "level": governance_level,
+            "reason": governance_reason,
+            "blacklisted_date": datetime.now().strftime('%Y-%m-%d'),
+        }
+        save_blacklist(blacklist)
+        logger.info(f"Blacklisted {ticker} ({governance_level}): {governance_reason}")
+
+
 # --- Gemini API ---
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -164,8 +201,13 @@ def fundamental_analysis(ticker: str) -> Dict:
     try:
         info = yf.Ticker(ticker).info
         market_cap = info.get('marketCap')
+        summary = info.get('longBusinessSummary', '')
+        # Truncate to 500 chars to keep CSV manageable
+        if summary and len(summary) > 500:
+            summary = summary[:497] + "..."
         return {
             "company_name": info.get('longName', 'N/A'),
+            "business_summary": summary,
             "market_cap": round(market_cap / 1e9, 2) if market_cap else None,
             "pe_trailing": round(info['trailingPE'], 2) if info.get('trailingPE') else None,
             "pe_forward": round(info['forwardPE'], 2) if info.get('forwardPE') else None,
@@ -180,10 +222,10 @@ def fundamental_analysis(ticker: str) -> Dict:
     except Exception as e:
         logger.error(f"Fundamental error for {ticker}: {e}")
         return {
-            "company_name": "N/A", "market_cap": None, "pe_trailing": None,
-            "pe_forward": None, "eps": None, "dividend_yield": None,
-            "roe": None, "debt_to_equity": None, "revenue": None,
-            "net_income": None, "beta": None,
+            "company_name": "N/A", "business_summary": "", "market_cap": None,
+            "pe_trailing": None, "pe_forward": None, "eps": None,
+            "dividend_yield": None, "roe": None, "debt_to_equity": None,
+            "revenue": None, "net_income": None, "beta": None,
         }
 
 
@@ -294,6 +336,9 @@ def analyze_single_stock(ticker: str, company: str, sector: str, sub_industry: s
     headlines = fetch_news_headlines(company)
     sg = analyze_sentiment_and_governance(headlines, ticker, company)
 
+    # Update blacklist if governance is High/Critical
+    update_blacklist(ticker, company, sg["governance_level"], sg["governance_reason"])
+
     # AI Summary
     time.sleep(1)
     ai_summary = generate_stock_summary(ticker, tech, fund, sg["sentiment_score"])
@@ -304,6 +349,7 @@ def analyze_single_stock(ticker: str, company: str, sector: str, sub_industry: s
         "company": fund.get("company_name", company),
         "sector": sector,
         "sub_industry": sub_industry,
+        "business_summary": fund.get("business_summary", ""),
         "date": datetime.today().strftime('%Y-%m-%d'),
         "last_update": datetime.now().strftime('%Y-%m-%d %H:%M'),
         # Price
@@ -373,8 +419,13 @@ def run_full_analysis(max_workers: int = 5):
         except Exception:
             pass
 
-    # Filter stocks that need analysis
-    to_analyze = [s for s in sp500 if s["ticker"] not in already_done]
+    # Load blacklist — skip stocks with High/Critical governance risk
+    blacklist = load_blacklist()
+    if blacklist:
+        logger.info(f"Blacklisted {len(blacklist)} stocks (High/Critical governance): {list(blacklist.keys())}")
+
+    # Filter stocks that need analysis (skip done + blacklisted)
+    to_analyze = [s for s in sp500 if s["ticker"] not in already_done and s["ticker"] not in blacklist]
     logger.info(f"Analyzing {len(to_analyze)} stocks with {max_workers} workers...")
 
     errors = []
