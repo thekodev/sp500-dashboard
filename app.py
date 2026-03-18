@@ -66,6 +66,21 @@ def load_data():
     return df, blacklisted
 
 
+@st.cache_data(ttl=86400, show_spinner="Loading company descriptions...")
+def fetch_business_summaries(tickers: tuple) -> dict:
+    """Fetch business summaries for given tickers via yfinance, cached for 24h."""
+    import yfinance as yf
+    result = {}
+    for ticker in tickers:
+        try:
+            info = yf.Ticker(ticker).info
+            summary = info.get("longBusinessSummary") or ""
+            result[ticker] = summary[:400] if summary else ""
+        except Exception:
+            result[ticker] = ""
+    return result
+
+
 @st.cache_data(ttl=3600)
 def load_blacklist():
     """Load blacklist file."""
@@ -203,6 +218,18 @@ def render_overview_table(df: pd.DataFrame):
     # Inline filters
     df = render_table_filters(df)
 
+    # Fill missing business_summary from cache (fetched once per session)
+    if "business_summary" not in df.columns:
+        df = df.copy()
+        df["business_summary"] = ""
+    missing_mask = df["business_summary"].isna() | df["business_summary"].astype(str).str.strip().isin(["", "nan"])
+    missing_tickers = tuple(df.loc[missing_mask, "ticker"].tolist())
+    if missing_tickers:
+        cached = fetch_business_summaries(missing_tickers)
+        df = df.copy()
+        for ticker, summary in cached.items():
+            df.loc[df["ticker"] == ticker, "business_summary"] = summary
+
     display_cols = [
         "ticker", "company", "sector", "price", "change_1m_pct", "change_1y_pct",
         "trend", "rsi", "rsi_status", "volatility_pct",
@@ -227,8 +254,6 @@ def render_overview_table(df: pd.DataFrame):
         biz = _safe(row.get("business_summary"), 250)
         if biz:
             parts.append(f"📋 {biz}")
-        else:
-            parts.append("📋 Click row for company details")
         ai = _safe(row.get("ai_summary"), 200)
         if ai:
             parts.append(f"🤖 {ai}")
