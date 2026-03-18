@@ -66,19 +66,30 @@ def load_data():
     return df, blacklisted
 
 
-@st.cache_data(ttl=86400, show_spinner="Loading company descriptions...")
+@st.cache_data(ttl=86400, show_spinner="กำลังโหลดข้อมูลบริษัท...")
 def fetch_business_summaries(tickers: tuple) -> dict:
-    """Fetch business summaries for given tickers via yfinance, cached for 24h."""
+    """Fetch English business summaries for given tickers via yfinance, cached 24h."""
     import yfinance as yf
     result = {}
     for ticker in tickers:
         try:
             info = yf.Ticker(ticker).info
-            summary = info.get("longBusinessSummary") or ""
-            result[ticker] = summary[:400] if summary else ""
+            result[ticker] = info.get("longBusinessSummary") or ""
         except Exception:
             result[ticker] = ""
     return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_thai_description(ticker: str, company: str, english_summary: str) -> str:
+    """Use Gemini to summarize company description in Thai."""
+    if not GEMINI_API_KEY:
+        return english_summary or ""
+    if english_summary and english_summary.strip():
+        prompt = f"สรุปประวัติและธุรกิจของบริษัท {company} ({ticker}) เป็นภาษาไทย 3-5 ประโยค ไม่ต้องมีหัวข้อ:\n\n{english_summary}"
+    else:
+        prompt = f"อธิบายบริษัท {company} ({ticker}) ว่าทำธุรกิจอะไร สั้นๆ 3-5 ประโยค เป็นภาษาไทย"
+    return gemini_chat(prompt)
 
 
 @st.cache_data(ttl=3600)
@@ -239,56 +250,14 @@ def render_overview_table(df: pd.DataFrame):
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
 
-    def _safe(val, maxlen=250):
-        """Return clean string or empty — properly handles float NaN."""
-        if val is None:
-            return ""
-        if isinstance(val, float) and pd.isna(val):
-            return ""
-        s = str(val).strip()
-        return "" if s.lower() in ("nan", "none", "") else s[:maxlen]
-
-    # Build tooltip: 📋 business | 🤖 AI summary | ⚖️ governance
-    def _build_tooltip(row):
-        parts = []
-        biz = _safe(row.get("business_summary"), 250)
-        if biz:
-            parts.append(f"📋 {biz}")
-        ai = _safe(row.get("ai_summary"), 200)
-        if ai:
-            parts.append(f"🤖 {ai}")
-        gov_level = _safe(row.get("governance_level"))
-        gov_score = row.get("governance_score")
-        gov_r = _safe(row.get("governance_reason"), 150)
-        if gov_level:
-            gov_text = f"⚖️ Gov: {gov_level}"
-            if gov_score and not (isinstance(gov_score, float) and pd.isna(gov_score)):
-                gov_text += f" ({int(float(gov_score))}/10)"
-            if gov_r:
-                gov_text += f" — {gov_r}"
-            parts.append(gov_text)
-        return "  |  ".join(parts)
-
-    display_df["_tooltip"] = df.apply(_build_tooltip, axis=1)
-
-    # AgGrid setup
+    # AgGrid setup — no tooltip, click row to open dialog
     gb = GridOptionsBuilder.from_dataframe(display_df)
-    gb.configure_default_column(
-        tooltipField="_tooltip",
-        resizable=True,
-        sortable=True,
-        filter=False,
-    )
-    gb.configure_column("_tooltip", hide=True)
+    gb.configure_default_column(resizable=True, sortable=True, filter=False)
     gb.configure_column("ticker", pinned="left", width=90)
     gb.configure_column("company", width=180)
     gb.configure_column("sector", width=160)
     gb.configure_selection("single", use_checkbox=False)
-    gb.configure_grid_options(
-        tooltipShowDelay=300,
-        tooltipHideDelay=5000,
-        rowHeight=32,
-    )
+    gb.configure_grid_options(rowHeight=32)
     grid_opts = gb.build()
 
     result = AgGrid(
@@ -300,7 +269,7 @@ def render_overview_table(df: pd.DataFrame):
         allow_unsafe_jscode=True,
     )
 
-    # Show detail card when row is clicked
+    # Open dialog popup when row is clicked
     selected = result.get("selected_rows")
     try:
         if selected is None:
@@ -316,7 +285,7 @@ def render_overview_table(df: pd.DataFrame):
         if sel_ticker:
             match = df[df["ticker"] == sel_ticker]
             if not match.empty:
-                _render_stock_card(match.iloc[0])
+                _show_stock_dialog(match.iloc[0])
     except Exception:
         pass
 
@@ -389,24 +358,32 @@ def _fmt(stock, key, fmt="{}", default="N/A"):
         return str(val)
 
 
+@st.dialog("รายละเอียดหุ้น", width="large")
+def _show_stock_dialog(stock):
+    """Show full stock detail in a large modal dialog."""
+    _render_stock_card(stock)
+
+
 def _render_stock_card(stock):
-    """Render a stock detail card (used by both table click and detail tab)."""
+    """Render full stock detail card."""
     ticker = _v(stock, "ticker", "?")
     company = _v(stock, "company", "N/A")
     st.markdown(f"### {ticker} — {company}")
+    st.caption(f"🏭 {_v(stock, 'sector', '')} | {_v(stock, 'sub_industry', '')}")
 
-    # Business description
-    biz = _v(stock, "business_summary", "")
-    if not biz or biz == "N/A":
-        # Fallback: fetch live from Yahoo Finance
+    # Thai business description (Gemini, cached)
+    eng_biz = _v(stock, "business_summary", "")
+    if not eng_biz or eng_biz == "N/A":
         try:
             import yfinance as yf
-            info = yf.Ticker(ticker).info
-            biz = info.get("longBusinessSummary", "") or ""
+            eng_biz = yf.Ticker(ticker).info.get("longBusinessSummary", "") or ""
         except Exception:
-            biz = ""
-    if biz and biz != "N/A":
-        st.caption(f"📋 {biz[:400]}{'...' if len(biz) > 400 else ''}")
+            eng_biz = ""
+    with st.spinner("กำลังแปลข้อมูลบริษัท..."):
+        thai_desc = get_thai_description(ticker, company, eng_biz)
+    if thai_desc:
+        st.info(f"📋 **เกี่ยวกับบริษัท**\n\n{thai_desc}")
+    st.divider()
 
     # Row 1
     col1, col2, col3, col4 = st.columns(4)
