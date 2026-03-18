@@ -309,10 +309,13 @@ def render_top_movers(df: pd.DataFrame):
 
 def _v(stock, key, default="N/A"):
     """Safe value getter — returns default if NaN/None/empty."""
-    val = stock.get(key, default) if isinstance(stock, dict) else getattr(stock, key, default)
-    if val is None or (isinstance(val, float) and pd.isna(val)):
+    try:
+        val = stock[key]
+        if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() in ("", "nan", "None"):
+            return default
+        return val
+    except (KeyError, IndexError, TypeError):
         return default
-    return val
 
 
 def _fmt(stock, key, fmt="{}", default="N/A"):
@@ -334,8 +337,16 @@ def _render_stock_card(stock):
 
     # Business description
     biz = _v(stock, "business_summary", "")
-    if biz and str(biz).strip() and biz != "N/A":
-        st.caption(f"📋 {biz}")
+    if not biz or biz == "N/A":
+        # Fallback: fetch live from Yahoo Finance
+        try:
+            import yfinance as yf
+            info = yf.Ticker(ticker).info
+            biz = info.get("longBusinessSummary", "") or ""
+        except Exception:
+            biz = ""
+    if biz and biz != "N/A":
+        st.caption(f"📋 {biz[:400]}{'...' if len(biz) > 400 else ''}")
 
     # Row 1
     col1, col2, col3, col4 = st.columns(4)
