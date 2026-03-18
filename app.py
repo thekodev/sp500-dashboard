@@ -307,37 +307,66 @@ def render_top_movers(df: pd.DataFrame):
         st.dataframe(top_losers, use_container_width=True)
 
 
+def _v(stock, key, default="N/A"):
+    """Safe value getter — returns default if NaN/None/empty."""
+    val = stock.get(key, default) if isinstance(stock, dict) else getattr(stock, key, default)
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    return val
+
+
+def _fmt(stock, key, fmt="{}", default="N/A"):
+    """Format a value safely."""
+    val = _v(stock, key, None)
+    if val is None:
+        return default
+    try:
+        return fmt.format(val)
+    except Exception:
+        return str(val)
+
+
 def _render_stock_card(stock):
     """Render a stock detail card (used by both table click and detail tab)."""
-    st.markdown(f"### {stock['ticker']} — {stock.get('company', 'N/A')}")
+    ticker = _v(stock, "ticker", "?")
+    company = _v(stock, "company", "N/A")
+    st.markdown(f"### {ticker} — {company}")
 
     # Business description
-    biz = stock.get("business_summary", "")
-    if biz and pd.notna(biz) and str(biz).strip():
+    biz = _v(stock, "business_summary", "")
+    if biz and str(biz).strip() and biz != "N/A":
         st.caption(f"📋 {biz}")
 
-    # Info cards
+    # Row 1
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Price", f"${stock['price']}", f"{stock['change_1m_pct']:.2f}% (1M)")
-    col2.metric("P/E Ratio", f"{stock['pe_trailing'] or 'N/A'}")
-    col3.metric("RSI", f"{stock['rsi']}", stock['rsi_status'])
-    col4.metric("Sentiment", f"{stock['sentiment_score']:.3f}")
+    col1.metric("Price", _fmt(stock, "price", "${:.2f}"), _fmt(stock, "change_1m_pct", "{:+.2f}% (1M)"))
+    col2.metric("P/E Ratio", _fmt(stock, "pe_trailing", "{:.1f}"))
+    col3.metric("RSI", _fmt(stock, "rsi", "{:.1f}"), _v(stock, "rsi_status", ""))
+    col4.metric("Sentiment", _fmt(stock, "sentiment_score", "{:.3f}"))
 
+    # Row 2
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Market Cap", f"${stock['market_cap_b'] or 'N/A'}B")
-    col2.metric("ROE", f"{stock['roe_pct'] or 'N/A'}%")
-    col3.metric("Volatility", f"{stock['volatility_pct']:.2f}%")
-    col4.metric("Trend", stock['trend'])
+    col1.metric("Market Cap", _fmt(stock, "market_cap_b", "${:.1f}B"))
+    col2.metric("ROE", _fmt(stock, "roe_pct", "{:.1f}%"))
+    col3.metric("Volatility", _fmt(stock, "volatility_pct", "{:.2f}%"))
+    col4.metric("Trend", _v(stock, "trend", "N/A"))
+
+    # Row 3
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Beta", _fmt(stock, "beta", "{:.2f}"))
+    col2.metric("Dividend", _fmt(stock, "dividend_yield_pct", "{:.2f}%"))
+    col3.metric("52W High", _fmt(stock, "high_52w", "${:.2f}"))
+    col4.metric("52W Low", _fmt(stock, "low_52w", "${:.2f}"))
 
     # Governance Risk
-    gov_score = stock.get("governance_score", 0)
-    gov_level = stock.get("governance_level", "Low")
-    gov_reason = stock.get("governance_reason", "")
-    if gov_score is not None and pd.notna(gov_score):
+    gov_score = _v(stock, "governance_score", None)
+    gov_level = _v(stock, "governance_level", "Low")
+    gov_reason = _v(stock, "governance_reason", "")
+    if gov_score is not None:
         gov_icons = {"Low": "✅", "Medium": "⚠️", "High": "🔶", "Critical": "🔴"}
-        icon = gov_icons.get(gov_level, "❓")
-        msg = f"{icon} **Governance Risk: {gov_level} ({int(gov_score)}/10)**"
-        if gov_reason:
+        icon = gov_icons.get(str(gov_level), "❓")
+        msg = f"{icon} **Governance Risk: {gov_level} ({int(float(gov_score))}/10)**"
+        if gov_reason and gov_reason != "N/A":
             msg += f"\n\n{gov_reason}"
         if gov_level in ("High", "Critical"):
             st.error(msg)
@@ -347,12 +376,14 @@ def _render_stock_card(stock):
             st.success(msg)
 
     # AI Summary
-    if stock.get("ai_summary") and pd.notna(stock["ai_summary"]):
-        st.info(f"🤖 **AI Summary:** {stock['ai_summary']}")
+    ai_sum = _v(stock, "ai_summary", "")
+    if ai_sum and ai_sum != "N/A":
+        st.info(f"🤖 **AI Summary:** {ai_sum}")
 
     # News Summary
-    if stock.get("news_summary") and pd.notna(stock["news_summary"]):
-        st.caption(f"📰 **News:** {stock['news_summary']}")
+    news_sum = _v(stock, "news_summary", "")
+    if news_sum and news_sum != "N/A":
+        st.caption(f"📰 **News:** {news_sum}")
 
 
 def render_stock_detail(df: pd.DataFrame):
