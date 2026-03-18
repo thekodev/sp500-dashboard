@@ -102,59 +102,105 @@ def render_header(df: pd.DataFrame):
 
 
 def render_sidebar(df: pd.DataFrame):
-    """Render sidebar filters."""
-    st.sidebar.header("Filters")
+    """Sidebar — filters moved inline to table, sidebar now shows summary only."""
+    return df
 
-    # Sector filter
-    sectors = ["All"] + sorted(df["sector"].dropna().unique().tolist())
-    selected_sector = st.sidebar.selectbox("Sector", sectors)
 
-    # Trend filter
-    selected_trend = st.sidebar.selectbox("Trend", ["All", "Uptrend", "Downtrend"])
+def render_table_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """Render inline filters above the overview table."""
+    with st.expander("🔽 Filters", expanded=True):
+        c1, c2, c3, c4 = st.columns(4)
+        c5, c6, c7, c8 = st.columns(4)
 
-    # RSI filter
-    selected_rsi = st.sidebar.selectbox("RSI Status", ["All", "Overbought", "Oversold", "Neutral"])
+        # --- Categorical ---
+        sectors = ["All"] + sorted(df["sector"].dropna().unique().tolist())
+        sector = c1.selectbox("Sector", sectors, key="tbl_sector")
 
-    # Governance Risk filter
-    governance_options = ["All", "Low", "Medium", "High", "Critical"]
-    if "governance_level" in df.columns:
-        selected_governance = st.sidebar.selectbox("Governance Risk", governance_options)
-    else:
-        selected_governance = "All"
+        trend = c2.selectbox("Trend", ["All", "Uptrend", "Downtrend"], key="tbl_trend")
 
-    # Sentiment filter
-    sentiment_range = st.sidebar.slider("Sentiment Score", -1.0, 1.0, (-1.0, 1.0), 0.1)
+        rsi_status = c3.selectbox("RSI Status", ["All", "Overbought", "Neutral", "Oversold"], key="tbl_rsi")
 
-    # Search
-    search = st.sidebar.text_input("Search ticker / company")
+        gov_level = c4.selectbox("Gov Level", ["All", "Low", "Medium"], key="tbl_gov")
 
-    # Apply filters
+        # --- Numeric ---
+        sentiment_op = c5.selectbox("Sentiment", ["Any", "> 0.1", "> 0.3", "< -0.1", "< -0.3"], key="tbl_sent_op")
+
+        rsi_op = c6.selectbox("RSI", ["Any", "< 30", "30-70", "> 70", "< 50", "> 50"], key="tbl_rsi_val")
+
+        change_op = c7.selectbox("1M Change", ["Any", "> 5%", "> 10%", "< -5%", "< -10%"], key="tbl_chg")
+
+        pe_op = c8.selectbox("P/E Ratio", ["Any", "< 15", "15-25", "25-40", "> 40"], key="tbl_pe")
+
+        # --- Search ---
+        search = st.text_input("🔍 Search ticker / company", key="tbl_search")
+
     filtered = df.copy()
-    if selected_sector != "All":
-        filtered = filtered[filtered["sector"] == selected_sector]
-    if selected_trend != "All":
-        filtered = filtered[filtered["trend"] == selected_trend]
-    if selected_rsi != "All":
-        filtered = filtered[filtered["rsi_status"] == selected_rsi]
-    filtered = filtered[
-        (filtered["sentiment_score"] >= sentiment_range[0])
-        & (filtered["sentiment_score"] <= sentiment_range[1])
-    ]
-    if selected_governance != "All" and "governance_level" in filtered.columns:
-        filtered = filtered[filtered["governance_level"] == selected_governance]
+
+    # Categorical filters
+    if sector != "All":
+        filtered = filtered[filtered["sector"] == sector]
+    if trend != "All":
+        filtered = filtered[filtered["trend"] == trend]
+    if rsi_status != "All":
+        filtered = filtered[filtered["rsi_status"] == rsi_status]
+    if gov_level != "All" and "governance_level" in filtered.columns:
+        filtered = filtered[filtered["governance_level"] == gov_level]
+
+    # Numeric filters
+    op_map = {
+        "> 0.1": ("sentiment_score", ">", 0.1), "> 0.3": ("sentiment_score", ">", 0.3),
+        "< -0.1": ("sentiment_score", "<", -0.1), "< -0.3": ("sentiment_score", "<", -0.3),
+    }
+    if sentiment_op in op_map:
+        col, op, val = op_map[sentiment_op]
+        filtered = filtered[filtered[col] > val] if op == ">" else filtered[filtered[col] < val]
+
+    if rsi_op == "< 30":
+        filtered = filtered[filtered["rsi"] < 30]
+    elif rsi_op == "30-70":
+        filtered = filtered[(filtered["rsi"] >= 30) & (filtered["rsi"] <= 70)]
+    elif rsi_op == "> 70":
+        filtered = filtered[filtered["rsi"] > 70]
+    elif rsi_op == "< 50":
+        filtered = filtered[filtered["rsi"] < 50]
+    elif rsi_op == "> 50":
+        filtered = filtered[filtered["rsi"] > 50]
+
+    if change_op == "> 5%":
+        filtered = filtered[filtered["change_1m_pct"] > 5]
+    elif change_op == "> 10%":
+        filtered = filtered[filtered["change_1m_pct"] > 10]
+    elif change_op == "< -5%":
+        filtered = filtered[filtered["change_1m_pct"] < -5]
+    elif change_op == "< -10%":
+        filtered = filtered[filtered["change_1m_pct"] < -10]
+
+    if pe_op == "< 15":
+        filtered = filtered[filtered["pe_trailing"] < 15]
+    elif pe_op == "15-25":
+        filtered = filtered[(filtered["pe_trailing"] >= 15) & (filtered["pe_trailing"] <= 25)]
+    elif pe_op == "25-40":
+        filtered = filtered[(filtered["pe_trailing"] > 25) & (filtered["pe_trailing"] <= 40)]
+    elif pe_op == "> 40":
+        filtered = filtered[filtered["pe_trailing"] > 40]
+
     if search:
-        search_lower = search.lower()
+        s = search.lower()
         filtered = filtered[
-            filtered["ticker"].str.lower().str.contains(search_lower, na=False)
-            | filtered["company"].str.lower().str.contains(search_lower, na=False)
+            filtered["ticker"].str.lower().str.contains(s, na=False)
+            | filtered["company"].str.lower().str.contains(s, na=False)
         ]
 
+    st.caption(f"Showing **{len(filtered)}** of {len(df)} stocks")
     return filtered
 
 
 def render_overview_table(df: pd.DataFrame):
     """Render overview table. Click a row to see stock detail below."""
     st.subheader("Stock Overview")
+
+    # Inline filters
+    df = render_table_filters(df)
 
     display_cols = [
         "ticker", "company", "sector", "price", "change_1m_pct", "change_1y_pct",
