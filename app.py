@@ -12,7 +12,6 @@ import json
 import re
 import requests
 from datetime import datetime
-from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # --- Page Config ---
 st.set_page_config(
@@ -250,35 +249,40 @@ def render_overview_table(df: pd.DataFrame):
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
 
-    # AgGrid setup — no tooltip, click row to open dialog
-    gb = GridOptionsBuilder.from_dataframe(display_df)
-    gb.configure_default_column(resizable=True, sortable=True, filter=False)
-    gb.configure_column("ticker", pinned="left", width=90)
-    gb.configure_column("company", width=180)
-    gb.configure_column("sector", width=160)
-    gb.configure_selection("single", use_checkbox=False)
-    gb.configure_grid_options(rowHeight=32)
-    grid_opts = gb.build()
+    rename = {
+        "ticker": "Ticker", "company": "Company", "sector": "Sector",
+        "price": "Price ($)", "change_1m_pct": "1M %", "change_1y_pct": "1Y %",
+        "trend": "Trend", "rsi": "RSI", "rsi_status": "RSI Status",
+        "volatility_pct": "Volatility %", "pe_trailing": "P/E",
+        "roe_pct": "ROE %", "market_cap_b": "MCap ($B)",
+        "sentiment_score": "Sentiment", "governance_score": "Gov Risk",
+        "governance_level": "Gov Level", "last_update": "Last Update",
+    }
+    display_df = display_df.rename(columns={k: v for k, v in rename.items() if k in display_df.columns})
 
-    result = AgGrid(
+    st.caption("💡 คลิกที่แถวเพื่อดูรายละเอียดบริษัท")
+    event = st.dataframe(
         display_df,
-        gridOptions=grid_opts,
-        update_mode=GridUpdateMode.SELECTION_CHANGED,
-        height=500,
         use_container_width=True,
-        allow_unsafe_jscode=True,
+        height=500,
+        on_select="rerun",
+        selection_mode="single-row",
+        column_config={
+            "1M %": st.column_config.NumberColumn(format="%.2f%%"),
+            "1Y %": st.column_config.NumberColumn(format="%.2f%%"),
+            "Volatility %": st.column_config.NumberColumn(format="%.2f%%"),
+            "ROE %": st.column_config.NumberColumn(format="%.2f%%"),
+            "MCap ($B)": st.column_config.NumberColumn(format="$%.1fB"),
+            "Sentiment": st.column_config.ProgressColumn(min_value=-1, max_value=1, format="%.3f"),
+            "Gov Risk": st.column_config.ProgressColumn(min_value=0, max_value=10, format="%d/10"),
+        },
     )
 
-    # Store selected ticker in session_state
-    selected = result.get("selected_rows")
-    try:
-        if isinstance(selected, pd.DataFrame) and not selected.empty:
-            st.session_state["dialog_ticker"] = selected.iloc[0]["ticker"]
-        elif isinstance(selected, list) and len(selected) > 0:
-            row = selected[0]
-            st.session_state["dialog_ticker"] = row["ticker"] if isinstance(row, dict) else str(row)
-    except Exception:
-        pass
+    # Open dialog when row is clicked
+    selected_rows = event.selection.rows if event and event.selection else []
+    if selected_rows:
+        stock = df.iloc[selected_rows[0]]
+        _show_stock_dialog(stock)
 
 
 def render_sector_chart(df: pd.DataFrame):
@@ -661,13 +665,6 @@ def main():
     filtered_df = render_sidebar(df)
     render_header(filtered_df)
 
-    # Open stock dialog if a row was clicked
-    dialog_ticker = st.session_state.get("dialog_ticker")
-    if dialog_ticker:
-        match = df[df["ticker"] == dialog_ticker]
-        if not match.empty:
-            _show_stock_dialog(match.iloc[0])
-        st.session_state.pop("dialog_ticker", None)
 
     # Run Analysis button in sidebar
     render_run_button()
