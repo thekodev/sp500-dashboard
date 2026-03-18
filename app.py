@@ -227,6 +227,8 @@ def render_overview_table(df: pd.DataFrame):
         biz = _safe(row.get("business_summary"), 250)
         if biz:
             parts.append(f"📋 {biz}")
+        else:
+            parts.append("📋 Click row for company details")
         ai = _safe(row.get("ai_summary"), 200)
         if ai:
             parts.append(f"🤖 {ai}")
@@ -275,11 +277,23 @@ def render_overview_table(df: pd.DataFrame):
 
     # Show detail card when row is clicked
     selected = result.get("selected_rows")
-    if selected is not None and len(selected) > 0:
-        sel_ticker = selected[0]["ticker"] if isinstance(selected[0], dict) else selected.iloc[0]["ticker"]
-        match = df[df["ticker"] == sel_ticker]
-        if not match.empty:
-            _render_stock_card(match.iloc[0])
+    try:
+        if selected is None:
+            sel_ticker = None
+        elif isinstance(selected, pd.DataFrame):
+            sel_ticker = selected.iloc[0]["ticker"] if not selected.empty else None
+        elif isinstance(selected, list) and len(selected) > 0:
+            row = selected[0]
+            sel_ticker = row["ticker"] if isinstance(row, dict) else str(row)
+        else:
+            sel_ticker = None
+
+        if sel_ticker:
+            match = df[df["ticker"] == sel_ticker]
+            if not match.empty:
+                _render_stock_card(match.iloc[0])
+    except Exception:
+        pass
 
 
 def render_sector_chart(df: pd.DataFrame):
