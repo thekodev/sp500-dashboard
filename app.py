@@ -212,16 +212,37 @@ def render_overview_table(df: pd.DataFrame):
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
 
-    # Build tooltip text per row
-    def _tooltip(row):
-        biz = str(row.get("business_summary", "") or "")[:200]
-        ai = str(row.get("ai_summary", "") or "")[:200]
-        gov = f"Gov: {row.get('governance_level','N/A')} ({row.get('governance_score','N/A')}/10)"
-        gov_r = str(row.get("governance_reason", "") or "")[:150]
-        parts = [biz, ai, gov, gov_r]
-        return " | ".join(p for p in parts if p.strip())
+    def _safe(val, maxlen=250):
+        """Return clean string or empty — properly handles float NaN."""
+        if val is None:
+            return ""
+        if isinstance(val, float) and pd.isna(val):
+            return ""
+        s = str(val).strip()
+        return "" if s.lower() in ("nan", "none", "") else s[:maxlen]
 
-    display_df["_tooltip"] = df.apply(_tooltip, axis=1)
+    # Build tooltip: 📋 business | 🤖 AI summary | ⚖️ governance
+    def _build_tooltip(row):
+        parts = []
+        biz = _safe(row.get("business_summary"), 250)
+        if biz:
+            parts.append(f"📋 {biz}")
+        ai = _safe(row.get("ai_summary"), 200)
+        if ai:
+            parts.append(f"🤖 {ai}")
+        gov_level = _safe(row.get("governance_level"))
+        gov_score = row.get("governance_score")
+        gov_r = _safe(row.get("governance_reason"), 150)
+        if gov_level:
+            gov_text = f"⚖️ Gov: {gov_level}"
+            if gov_score and not (isinstance(gov_score, float) and pd.isna(gov_score)):
+                gov_text += f" ({int(float(gov_score))}/10)"
+            if gov_r:
+                gov_text += f" — {gov_r}"
+            parts.append(gov_text)
+        return "  |  ".join(parts)
+
+    display_df["_tooltip"] = df.apply(_build_tooltip, axis=1)
 
     # AgGrid setup
     gb = GridOptionsBuilder.from_dataframe(display_df)
