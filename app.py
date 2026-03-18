@@ -281,8 +281,14 @@ def render_overview_table(df: pd.DataFrame):
     # Open dialog when row is clicked
     selected_rows = event.selection.rows if event and event.selection else []
     if selected_rows:
-        stock = df.iloc[selected_rows[0]]
-        _show_stock_dialog(stock)
+        st.session_state["selected_stock_idx"] = selected_rows[0]
+
+    # Show detail panel below table
+    idx = st.session_state.get("selected_stock_idx")
+    if idx is not None and idx < len(df):
+        stock = df.iloc[idx]
+        with st.container(border=True):
+            _render_stock_card(stock)
 
 
 def render_sector_chart(df: pd.DataFrame):
@@ -352,11 +358,6 @@ def _fmt(stock, key, fmt="{}", default="N/A"):
     except Exception:
         return str(val)
 
-
-@st.dialog("รายละเอียดหุ้น", width="large")
-def _show_stock_dialog(stock):
-    """Show full stock detail in a large modal dialog."""
-    _render_stock_card(stock)
 
 
 def _render_stock_card(stock):
