@@ -12,6 +12,7 @@ import json
 import re
 import requests
 from datetime import datetime
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 # --- Page Config ---
 st.set_page_config(
@@ -211,44 +212,53 @@ def render_overview_table(df: pd.DataFrame):
     available = [c for c in display_cols if c in df.columns]
     display_df = df[available].copy()
 
-    # Format columns
-    rename = {
-        "ticker": "Ticker", "company": "Company", "sector": "Sector",
-        "price": "Price ($)", "change_1m_pct": "1M %", "change_1y_pct": "1Y %",
-        "trend": "Trend", "rsi": "RSI", "rsi_status": "RSI Status",
-        "volatility_pct": "Volatility %", "pe_trailing": "P/E",
-        "roe_pct": "ROE %", "market_cap_b": "MCap ($B)",
-        "sentiment_score": "Sentiment",
-        "governance_score": "Gov Risk",
-        "governance_level": "Gov Level",
-        "last_update": "Last Update",
-    }
-    display_df = display_df.rename(columns={k: v for k, v in rename.items() if k in display_df.columns})
+    # Build tooltip text per row
+    def _tooltip(row):
+        biz = str(row.get("business_summary", "") or "")[:200]
+        ai = str(row.get("ai_summary", "") or "")[:200]
+        gov = f"Gov: {row.get('governance_level','N/A')} ({row.get('governance_score','N/A')}/10)"
+        gov_r = str(row.get("governance_reason", "") or "")[:150]
+        parts = [biz, ai, gov, gov_r]
+        return " | ".join(p for p in parts if p.strip())
 
-    # Interactive table — clicking a row shows detail below
-    event = st.dataframe(
+    display_df["_tooltip"] = df.apply(_tooltip, axis=1)
+
+    # AgGrid setup
+    gb = GridOptionsBuilder.from_dataframe(display_df)
+    gb.configure_default_column(
+        tooltipField="_tooltip",
+        resizable=True,
+        sortable=True,
+        filter=False,
+    )
+    gb.configure_column("_tooltip", hide=True)
+    gb.configure_column("ticker", pinned="left", width=90)
+    gb.configure_column("company", width=180)
+    gb.configure_column("sector", width=160)
+    gb.configure_selection("single", use_checkbox=False)
+    gb.configure_grid_options(
+        tooltipShowDelay=300,
+        tooltipHideDelay=5000,
+        rowHeight=32,
+    )
+    grid_opts = gb.build()
+
+    result = AgGrid(
         display_df,
-        use_container_width=True,
+        gridOptions=grid_opts,
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
         height=500,
-        on_select="rerun",
-        selection_mode="single-row",
-        column_config={
-            "1M %": st.column_config.NumberColumn(format="%.2f%%"),
-            "1Y %": st.column_config.NumberColumn(format="%.2f%%"),
-            "Volatility %": st.column_config.NumberColumn(format="%.2f%%"),
-            "ROE %": st.column_config.NumberColumn(format="%.2f%%"),
-            "MCap ($B)": st.column_config.NumberColumn(format="$%.1fB"),
-            "Sentiment": st.column_config.ProgressColumn(min_value=-1, max_value=1, format="%.3f"),
-            "Gov Risk": st.column_config.ProgressColumn(min_value=0, max_value=10, format="%d/10"),
-        },
+        use_container_width=True,
+        allow_unsafe_jscode=True,
     )
 
-    # Show detail card when row is selected
-    selected_rows = event.selection.rows if event and event.selection else []
-    if selected_rows:
-        idx = selected_rows[0]
-        stock = df.iloc[idx]
-        _render_stock_card(stock)
+    # Show detail card when row is clicked
+    selected = result.get("selected_rows")
+    if selected is not None and len(selected) > 0:
+        sel_ticker = selected[0]["ticker"] if isinstance(selected[0], dict) else selected.iloc[0]["ticker"]
+        match = df[df["ticker"] == sel_ticker]
+        if not match.empty:
+            _render_stock_card(match.iloc[0])
 
 
 def render_sector_chart(df: pd.DataFrame):
