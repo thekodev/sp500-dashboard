@@ -269,23 +269,14 @@ def render_overview_table(df: pd.DataFrame):
         allow_unsafe_jscode=True,
     )
 
-    # Open dialog popup when row is clicked
+    # Store selected ticker in session_state
     selected = result.get("selected_rows")
     try:
-        if selected is None:
-            sel_ticker = None
-        elif isinstance(selected, pd.DataFrame):
-            sel_ticker = selected.iloc[0]["ticker"] if not selected.empty else None
+        if isinstance(selected, pd.DataFrame) and not selected.empty:
+            st.session_state["dialog_ticker"] = selected.iloc[0]["ticker"]
         elif isinstance(selected, list) and len(selected) > 0:
             row = selected[0]
-            sel_ticker = row["ticker"] if isinstance(row, dict) else str(row)
-        else:
-            sel_ticker = None
-
-        if sel_ticker:
-            match = df[df["ticker"] == sel_ticker]
-            if not match.empty:
-                _show_stock_dialog(match.iloc[0])
+            st.session_state["dialog_ticker"] = row["ticker"] if isinstance(row, dict) else str(row)
     except Exception:
         pass
 
@@ -669,6 +660,14 @@ def main():
 
     filtered_df = render_sidebar(df)
     render_header(filtered_df)
+
+    # Open stock dialog if a row was clicked
+    dialog_ticker = st.session_state.get("dialog_ticker")
+    if dialog_ticker:
+        match = df[df["ticker"] == dialog_ticker]
+        if not match.empty:
+            _show_stock_dialog(match.iloc[0])
+        st.session_state.pop("dialog_ticker", None)
 
     # Run Analysis button in sidebar
     render_run_button()
